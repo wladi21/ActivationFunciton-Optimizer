@@ -13,6 +13,9 @@ import logging
 from envs.dynamic_crossing import DynamicCrossingEnv
 from minigrid.core.world_object import Door, Goal, Lava, Wall, Ball, Key
 
+logging.basicConfig(
+    filename='activation_function_optimizer_gelu100k.log', level=logging.DEBUG)
+
 
 class ActivationFunctionOptimizer(lahc.LateAcceptanceHillClimber):
     def __init__(self, initial_state, agent, env, candidate_activations):
@@ -32,26 +35,31 @@ class ActivationFunctionOptimizer(lahc.LateAcceptanceHillClimber):
     def energy(self):
         total_reward = 0
         episode_range = 10
-        for _ in episode_range:
-            hidden_p = self.agent.get_initial_hidden()
-            action = -1
-            reward = 0
-            state = self.env.reset()[0]["image"].astype(np.float32).reshape(-1)
+        # @Aditya ----------
+        # I used to loop episode_range times over this part. This is what I thought you meant with call LAHC 10 times
+        # Currently the Search terminates after idle_steps*fraction < steps AND min_steps < steps. Meaning no matter what the loop runs for at least 100k steps,
+        # however 100 step takes about 30 seconds which leads to 8+ hours for 100k steps.
+        # After looking at the states, it seems pointless to continue searching after 5k idle steps, much less 90k like it is now
+        hidden_p = self.agent.get_initial_hidden()
+        action = -1
+        reward = 0
+        state = self.env.reset()[0]["image"].astype(np.float32).reshape(-1)
 
-            while True:
-                action, hidden_p = self.agent.select_action(
-                    state, action, reward, hidden_p, EPS_up=False, evaluate=True
-                )
-                next_state, reward, terminated, truncated, _ = self.env.step(
-                    action)
+        while True:
+            action, hidden_p = self.agent.select_action(
+                state, action, reward, hidden_p, EPS_up=False, evaluate=True
+            )
+            next_state, reward, terminated, truncated, _ = self.env.step(
+                action)
 
-                total_reward += reward
+            total_reward += reward
 
-                state = next_state["image"].astype(np.float32).reshape(-1)
-                if terminated or truncated:
-                    break
-
-        avg_reward = total_reward/episode_range
+            state = next_state["image"].astype(np.float32).reshape(-1)
+            if terminated or truncated:
+                break
+        logging.debug(
+            f"State: {self.state}, BestState: {self.best_state}, Reward: {total_reward}")
+        avg_reward = total_reward
         return avg_reward
 
 
@@ -228,12 +236,15 @@ def run_exp(args):
 
                 initial_state = np.random.randint(len(activation_functions))
                 lahc.LateAcceptanceHillClimber.steps_minimum = 100000
-                lahc.LateAcceptanceHillClimber.history_length = 500
-                lahc.LateAcceptanceHillClimber.updates_every = 10
+                lahc.LateAcceptanceHillClimber.history_length = 5000
+                lahc.LateAcceptanceHillClimber.updates_every = 100
+                lahc.LateAcceptanceHillClimber.steps_idle_fraction = 0.01
                 optimizer = ActivationFunctionOptimizer(
                     initial_state, agent, env, activation_functions)
                 optimizer.run()
-                best_activation_function = optimizer.best_state
+                optimized = optimizer.best_state
+                best_activation_function = activation_functions[optimized]
+
                 agent.critic.update_activation_function(
                     best_activation_function)
                 agent.critic_target.update_activation_function(
